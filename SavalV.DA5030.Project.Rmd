@@ -1,0 +1,964 @@
+---
+title: "End-to-End Machine Learning Workflow for Predicting Cardiovascular Disease:
+  Development and Evaluation"
+author: "Saval, Varshitha"
+date: "04/10/2025"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+subtitle: DA5030
+---
+
+# Goals of the project:
+
+The goal of this project is to predict the likelihood of an individual developing cardiovascular disease based on various health and lifestyle features. 
+
+This prediction is made using three machine learning models: 
+1)Logistic Regression,
+2)Random Forest, and 
+3)xgboost. 
+
+The dataset used for this project is from Kaggle and contains a variety of health indicators, including age, cholesterol, blood pressure, and smoking habits.
+
+Data Source: The dataset is sourced from Kaggle under the project title "Cardiovascular Disease Prediction."
+
+reference : https://raw.githubusercontent.com/varshithasaval/cardio-vasular-dataset/refs/heads/main/cardio_train.csv
+
+Data Description: This dataset contains several features such as age, gender, blood pressure, cholesterol levels, smoking habits, alcohol consumption, and physical activity. The target variable is whether or not a person has cardiovascular disease (binary classification: 1 = disease, 0 = no disease).
+
+Problem Type: This is a binary classification problem, where the goal is to predict whether an individual has cardiovascular disease based on the input features.
+
+Real-World Application: Cardiovascular diseases (CVD) are one of the leading causes of death globally. Early detection through predictive models can help healthcare professionals focus resources on individuals at higher risk, potentially saving lives and reducing healthcare costs. The goal of this model is to provide a predictive tool for early intervention.
+
+
+# load the required libraries
+
+```{r}
+
+# # Install required packages if not already installed
+# packages <- c("knitr", "VIM", "randomForest", "caret", "xgboost", 
+#               "pROC", "Metrics", "MLmetrics", "tidyverse")
+
+# installed <- packages %in% rownames(installed.packages())
+# if (any(!installed)) {
+#   install.packages(packages[!installed])
+# }
+
+
+library(knitr) #to generate dynamic documents
+library(VIM)  # for visualizing and imputing missing values
+library(randomForest)  # This library implements the Random Forest algorithm
+library(caret)  # Classification And REgression Training
+library(xgboost)  # xgboost for xgboost model
+library(pROC)   # (ROC) curves
+library(Metrics) # for calculating common model evaluation metrics
+library(MLmetrics) # for learning metrics, including accuracy, precision, recall, F1-score, and AUC
+library(tidyverse)
+
+
+```
+
+
+
+
+In this section, we load the dataset that will be used for our cardiovascular disease prediction project. The dataset is loaded from a CSV file located at the specified URL. After loading the data, we preview the first few rows to get an understanding of the structure and contents of the dataset.
+
+# Data loading and Data Overview
+
+```{r}
+# Data loading
+url_cardio <- "https://raw.githubusercontent.com/varshithasaval/cardio-vasular-dataset/refs/heads/main/cardio_train.csv"
+
+df_cardio <- read.csv(url_cardio, sep = ";")
+hd <- head(df_cardio)
+str <- str(df_cardio)
+
+```
+Understanding the Data
+The dataset contains 70,000 records with 13 features:
+
+id: Unique record identifier.
+
+age: Age in days.
+
+gender: 1 = Male, 2 = Female.
+
+height: Height in cm.
+
+weight: Weight in kg.
+
+ap_hi: Systolic blood pressure.
+
+ap_lo: Diastolic blood pressure.
+
+cholesterol: 1 = Normal, 2 = Above normal, 3 = Well above normal.
+
+gluc: 1 = Normal, 2 = Above normal, 3 = Well above normal.
+
+smoke: 0 = No, 1 = Yes.
+
+alco: 0 = No, 1 = Yes.
+
+active: 0 = No, 1 = Yes.
+
+cardio: Target variable (0 = No, 1 = Yes).
+
+The objective is to predict the likelihood of cardiovascular disease based on these features.
+
+
+# Data Cleaning and Finding the missing values
+
+```{r}
+
+# checking with the columns for missing values
+colSums(is.na(df_cardio))
+
+```
+# Simulating Missing Values
+
+Although the dataset does not have any missing values, we simulate missing data for the ap_hi (systolic blood pressure) and ap_lo (diastolic blood pressure) columns. These columns are numeric and are crucial features that affect the target variable, cardio (presence of cardiovascular disease). By introducing missing values in these columns, we can observe how imputation and model performance are impacted.
+
+The following code randomly introduces missing values in the ap_hi and ap_lo columns by selecting a random number of rows (between 10 and 40) and setting their values to NA. We will later handle these missing values through imputation.
+`
+
+```{r}
+
+data <- df_cardio
+
+# Simulate missing values in ap_hi and ap_lo below 30
+set.seed(123)
+
+# Columns to introduce missing values
+cols_to_remove <- c("ap_hi", "ap_lo")
+
+# Loop through each column and simulate missing data (only values < 30)
+for (col in cols_to_remove) {
+  # Identify rows where values are below 30
+  idx_below_30 <- which(data[[col]] < 30)
+  
+  # Randomly choose how many values to remove from those below 30
+  n_missing <- sample(10:40, 1)  # randomly chooses how many values to remove
+  missing_idx <- sample(idx_below_30, size = n_missing)
+  
+  # Set the selected rows to NA
+  data[[col]][missing_idx] <- NA
+}
+
+# Check how many NA values are in each column
+cols_na <- colSums(is.na(data))
+print(cols_na)
+
+
+```
+
+
+
+# Imputing the missing values 
+
+I selected k-Nearest Neighbors (kNN) for imputing missing values because it effectively handles numerical data by using similar data points to predict missing values. 
+
+Since the missing data in this dataset (blood pressure values ap_hi and ap_lo) are numeric and correlated with other features, kNN is a suitable method. Unlike simpler techniques (e.g., mean or median imputation), kNN respects the relationships between data points and provides more accurate imputations.
+
+I tested multiple k values and chose the best one to minimize remaining missing values, ensuring the dataset was ready for modeling without any gaps.
+
+
+```{r}
+
+# Perform kNN imputation on the selected columns only
+cols_to_impute <- c("ap_hi", "ap_lo")
+df_imputed <- data
+
+# Apply kNN imputation to 'ap_hi' and 'ap_lo' columns only
+df_imputed[cols_to_impute] <- kNN(df_imputed[cols_to_impute], k = 5, imp_var = FALSE)
+
+# Check for any remaining missing values after imputation
+remaining_na <- colSums(is.na(df_imputed))
+
+# Exploratort data plots and evalustion of distribution
+
+# Plotting a histogram for 'age' to check distribution
+ggplot(df_cardio, aes(x = age)) + geom_histogram(binwidth = 5, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of Age", x = "Age", y = "Frequency")
+
+# Plotting a density plot for 'age'
+ggplot(df_cardio, aes(x = ap_hi)) + geom_density(fill = "blue", alpha = 0.7) +
+  labs(title = "Density Plot of ap_hi", x = "ap_hi", y = "Density")
+
+
+
+```
+
+
+
+# Outliers
+
+Outlier Detection and Removal
+To improve model performance and reduce noise, I identified and removed outliers using Z-score normalization. 
+
+Outliers were defined as values with a Z-score > 3 or < -3. I iteratively removed rows containing such values until no extreme outliers remained. 
+
+This ensures the dataset is cleaner and less influenced by anomalous data points, especially for numeric variables like blood pressure and weight that directly impact the target variable.
+
+```{r}
+
+cols <- c("age", "height", "weight", "ap_hi", "ap_lo")
+
+# Function to count outliers
+count_outliers <- function(df, cols) {
+  z <- scale(df[, cols])
+  sapply(as.data.frame(z), function(x) sum(abs(x) > 3))
+}
+
+# Check outliers before any removal
+outliers_before <- count_outliers(df_imputed, cols)
+print("Outliers before removal:")
+print(outliers_before)
+
+# Boxplot before outlier removal
+boxplot(df_imputed[, cols], main = "Before Outlier Removal", las = 2, col = "tomato", outline = TRUE)
+
+# Assuming df_imputed is your data frame
+repeat {
+  z <- scale(df_imputed[, cols])  # Scale the data
+  out_rows <- apply(abs(z) > 3, 1, any)  # Identify outliers
+  
+  # Check if out_rows is all FALSE or NA
+  if (all(!out_rows, na.rm = TRUE)) break  # Stop if no more outliers
+  
+  df_imputed <- df_imputed[!out_rows, ]  # Remove outlier rows
+}
+
+# Check outliers after removal
+outliers_after <- count_outliers(df_imputed, cols)
+print("Outliers after removal:")
+print(outliers_after)
+
+# Boxplots before and after outlier removal
+par(mfrow = c(1, 2))
+
+# Boxplot after outlier removal (it should be df_imputed now)
+boxplot(df_imputed[, cols], main = "After Outlier Removal", las = 2, col = "skyblue", outline = TRUE)
+
+# Correlation between the variables
+correlation_var <- cor(df_imputed)
+
+```
+
+# Feature Engineering
+
+Feature engineering was performed to create new variables that provide more meaningful and relevant information for the model. By calculating BMI, pulse pressure, and converting age to years, the model can better understand relationships and patterns in the data, leading to improved performance and more accurate predictions.
+
+
+```{r}
+
+# BMI = weight (kg) / height (m)^2
+df_imputed$BMI <- df_imputed$weight / ((df_imputed$height / 100)^2)
+
+# Pulse pressure = systolic (ap_hi) - Diastolic (ap_lo)
+df_imputed$pulse_pressure <- df_imputed$ap_hi - df_imputed$ap_lo
+
+# Convert age from days to years
+df_imputed$age_years <- df_imputed$age / 365
+
+# View first few rows of updated data
+head(df_imputed)
+
+
+```
+
+
+
+# Splitting the data into training and testing data set
+
+
+```{r}
+set.seed(123)
+
+# Split data into training and testing sets (80% training, 20% testing)
+sample_index <- sample(1:nrow(df_imputed), 0.8 * nrow(df_imputed), replace = FALSE)
+
+# Create training and testing sets
+training_set <- df_imputed[sample_index, ]
+testing_set <- df_imputed[-sample_index, ]
+
+# View first few rows of training and testing sets
+knitr::kable(head(training_set))
+knitr::kable(head(testing_set))
+
+
+```
+
+# Normalizing the data 
+
+```{r}
+
+# Columns to normalize
+cols_to_normalize <- c("age", "height", "weight", "ap_hi", "ap_lo", "BMI", "pulse_pressure")
+
+# Normalize only the selected columns
+df_imputed[cols_to_normalize] <- scale(df_imputed[cols_to_normalize])
+
+normalized_df <- df_imputed 
+
+
+# View first few rows
+knitr::kable(head(normalized_df))
+
+```
+
+# Logistic regression 
+
+Purpose: Target variable is cardio, which is a binary variable (either 0 or 1). Logistic regression is specifically designed for binary outcomes, making it a natural choice for problems where the target variable has two possible classes.
+
+
+```{r}
+# Logistic Regression with 5-fold cross-validation
+
+log_training_set <- training_set
+log_testing_set <- testing_set
+
+# Ensure target is a factor
+log_training_set$cardio <- factor(log_training_set$cardio, levels = c(0, 1), labels = c("No", "Yes"))
+log_testing_set$cardio <- factor(log_testing_set$cardio, levels = c(0, 1), labels = c("No", "Yes"))
+
+log_model <- train(factor(cardio) ~ ., 
+                   data = log_training_set, 
+                   method = "glm", 
+                   family = "binomial",
+                   trControl = trainControl(method = "cv", number = 5, classProbs = TRUE, summaryFunction = twoClassSummary),
+                   metric = "ROC"
+)
+
+
+# BOOSTED LOGISTIC REGRESSION (LogitBoost) 
+
+set.seed(123)
+boosted_log_model <- train(
+  cardio ~ ., 
+  data = log_training_set,
+  method = "LogitBoost",
+  trControl = trainControl(method = "cv", number = 5, classProbs = TRUE, summaryFunction = twoClassSummary),
+  metric = "ROC",
+  tuneLength = 10
+)
+
+boosted_log_preds <- predict(boosted_log_model, newdata = log_testing_set)
+boosted_log_probs <- predict(boosted_log_model, newdata = log_testing_set, type = "prob")[, "Yes"]
+
+cm_log <- confusionMatrix(boosted_log_preds, log_testing_set$cardio)
+roc_boosted_log <- roc(response = log_testing_set$cardio, predictor = boosted_log_probs)
+plot(roc_boosted_log, col = "purple", main = "ROC - Boosted Logistic Regression")
+
+```
+
+Used Logistic Regression with 5-fold cross-validation to predict cardiovascular disease (cardio). This method is effective for binary classification problems like this one, where the goal is to predict the presence or absence of a condition based on several features.
+
+Key Results:
+Accuracy: 72.42% – The model correctly predicted 72% of the cases.
+
+Sensitivity: 78.89% – The model identified 78.89% of true positive cases (people with the disease).
+
+Specificity: 65.49% – The model identified 65.49% of true negative cases (people without the disease).
+
+Kappa: 0.4455 – Indicates moderate agreement between predicted and actual values.
+
+
+
+
+# Random forest
+
+Random Forest would be a suitable choice for this dataset. It can handle complex, non-linear relationships between features like age, blood pressure, and weight, and is robust to outliers and missing values. Unlike simpler models, Random Forest uses multiple decision trees to improve predictive performance and reduce the risk of overfitting. 
+
+```{r}
+
+rf_training_set <- training_set
+rf_testing_set <- testing_set
+
+# Ensure target is a factor
+rf_training_set$cardio <- factor(rf_training_set$cardio, levels = c(0, 1), labels = c("No", "Yes"))
+rf_testing_set$cardio <- factor(rf_testing_set$cardio, levels = c(0, 1), labels = c("No", "Yes"))
+
+# Preprocessing
+preProc <- preProcess(rf_training_set, method = c("center", "scale"))
+train_scaled <- predict(preProc, rf_training_set)
+test_scaled <- predict(preProc, rf_testing_set)
+
+# Hyperparameter tuning grid
+rf_grid <- expand.grid(mtry = c(2, 3, 4))
+
+# Train Random Forest with CV
+set.seed(123)
+rf_model <- train(
+  cardio ~ ., 
+  data = train_scaled,
+  method = "rf",
+  trControl = trainControl(method = "cv", number = 5, classProbs = TRUE, summaryFunction = twoClassSummary),
+  metric = "ROC",
+  tuneGrid = rf_grid,
+  ntree = 300
+)
+
+# Predictions
+rf_predictions <- predict(rf_model, newdata = test_scaled)
+rf_probs <- predict(rf_model, newdata = test_scaled, type = "prob")[, "Yes"]
+
+# Evaluation
+cm_rf <- confusionMatrix(rf_predictions, test_scaled$cardio)
+
+roc_rf <- roc(response = test_scaled$cardio, predictor = rf_probs)
+plot(roc_rf, col = "darkgreen", main = "ROC Curve - Random Forest")
+
+
+```
+
+The confusion matrix shows that the boosted logistic regression model achieved an accuracy of approximately 73%, meaning it correctly predicted cardiovascular outcomes in about three out of four cases. 
+
+The sensitivity (77.9%) indicates that the model is quite effective at identifying individuals without cardiovascular disease, while the specificity (67.86%) shows it is moderately good at detecting those with the condition.
+
+The kappa value of 0.46 suggests a moderate agreement between the model’s predictions and the actual outcomes beyond chance, and the very low p-value (< 2.2e-16) confirms that the model’s performance is statistically significant compared to random guessing.
+
+
+# xgboost model
+
+
+```{r}
+
+# Set number of bagging iterations
+n_bags <- 10
+set.seed(123)
+
+# Prepare storage for predictions
+bagged_preds <- matrix(NA, nrow = nrow(testing_set), ncol = n_bags)
+
+test_matrix <- model.matrix(cardio ~ ., data = testing_set)
+
+
+for (i in 1:n_bags) {
+  # Bootstrap sample
+  boot_idx <- sample(1:nrow(training_set), replace = TRUE)
+  boot_train <- training_set[boot_idx, ]
+  boot_label <- ifelse(train_scaled$cardio[boot_idx] == "Yes", 1, 0)
+  
+  # Create DMatrix for this bootstrap
+  boot_matrix <- model.matrix(cardio ~ ., data = boot_train)
+  dtrain_boot <- xgb.DMatrix(data = boot_matrix, label = boot_label)
+  
+  # Train model
+  model <- xgboost(data = dtrain_boot, 
+                   objective = "binary:logistic", 
+                   nrounds = 100, 
+                   eta = 0.1, 
+                   max_depth = 3, 
+                   verbose = 0)
+  
+  # Predict on the test set
+  bagged_preds[, i] <- predict(model, newdata = test_matrix)
+}
+
+# Average predictions and convert to class labels
+final_probs <- rowMeans(bagged_preds)
+final_preds <- ifelse(final_probs > 0.5, "Yes", "No")
+final_preds <- factor(final_preds, levels = c("No", "Yes"))
+
+# Evaluate
+cm_xg <- confusionMatrix(final_preds, test_scaled$cardio)
+
+roc_bagged <- roc(response = test_scaled$cardio, predictor = final_probs)
+plot(roc_bagged, col = "orange", main = "ROC Curve - Bagged XGBoost Model")
+
+```
+The XGBoost model achieved an accuracy of 73%, correctly predicting 73% of cases, with a sensitivity of 77.9%, meaning it identified 78% of individuals with cardiovascular disease.
+
+Its specificity was 67.9%, correctly identifying 68% of healthy individuals. The model's AUC (ROC) is expected to be high, indicating strong differentiation between the two classes (disease vs. no disease). 
+
+XGBoost was chosen for this analysis because it handles complex, non-linear relationships effectively, which is crucial for predicting cardiovascular disease. Its boosting technique improves accuracy by combining multiple decision trees, and it is capable of managing large datasets, missing values, and providing insights into feature importance. This makes XGBoost an efficient and powerful choice for such classification tasks.
+
+# Ensemble and Evaluations of models
+
+*weighted voting ensembling*
+
+Weighted voting ensembling improves prediction accuracy by combining multiple models and giving more importance to the better-performing ones. It leverages the strengths of each model, handles class imbalances, reduces overfitting, and optimizes overall performance.
+
+```{r}
+
+# Accuracies
+boosted_log_accuracy <- cm_log$overall["Accuracy"]
+rf_accuracy <- cm_rf$overall["Accuracy"]
+xgb_accuracy <- cm_xg$overall["Accuracy"]
+
+# Weighted probabilities
+weights <- c(boosted_log_accuracy, rf_accuracy, xgb_accuracy)
+weights <- weights / sum(weights)
+
+final_prob <- (weights[1] * boosted_log_probs) + 
+              (weights[2] * rf_probs) + 
+              (weights[3] * final_probs)
+
+# Ensemble predictions
+final_preds_ensemble <- ifelse(final_prob > 0.5, "Yes", "No")
+final_preds_ensemble <- factor(final_preds_ensemble, levels = c("No", "Yes"))
+
+# Confusion matrix
+cm_ensemble <- confusionMatrix(final_preds_ensemble, test_scaled$cardio)
+
+# F1 Score
+ensemble_f1 <- F1_Score(y_pred = final_preds_ensemble, y_true = test_scaled$cardio, positive = "Yes")
+
+# MSE and RMSE
+ensemble_mse <- mean((as.numeric(final_preds_ensemble) - as.numeric(test_scaled$cardio))^2)
+ensemble_rmse <- sqrt(ensemble_mse)
+
+
+# Metrics table
+ensemble_metrics <- data.frame(
+  Model = "Ensemble (Weighted Vote)",
+  Accuracy = cm_ensemble$overall["Accuracy"],
+  F1_Score = ensemble_f1,
+  MSE = ensemble_mse,
+  RMSE = ensemble_rmse
+)
+
+ensemble_metrics
+```
+The ensemble model achieves an accuracy of 72.57%, with strong sensitivity (80.01%) for detecting cardiovascular disease, meaning it effectively identifies those with the condition. 
+
+The specificity is 64.80%, indicating a moderate ability to correctly identify healthy individuals. The Kappa value (0.4495) suggests moderate agreement between the predicted and actual outcomes. 
+
+The model's balanced accuracy (72.41%) reflects good performance across both classes. This makes the ensemble model suitable for predicting cardiovascular disease, as it prioritizes detecting diseased individuals while maintaining reasonable accuracy for healthy individuals.
+
+# Comaparision of logistic, random forest and xgboost models with ensemble
+
+This step helps in making an informed, data-driven choice of the best-performing model.
+
+```{r}
+# F1 scores
+f1_log <- F1_Score(y_pred = boosted_log_preds, y_true = log_testing_set$cardio, positive = "Yes")
+f1_rf <- F1_Score(y_pred = rf_predictions, y_true = test_scaled$cardio, positive = "Yes")
+f1_xg <- F1_Score(y_pred = final_preds, y_true = test_scaled$cardio, positive = "Yes")
+f1_ensemble <- F1_Score(y_pred = final_preds_ensemble, y_true = test_scaled$cardio, positive = "Yes")
+
+# MSE & RMSE
+mse_log <- mean((as.numeric(boosted_log_preds) - as.numeric(log_testing_set$cardio))^2)
+rmse_log <- sqrt(mse_log)
+
+mse_rf <- mean((as.numeric(rf_predictions) - as.numeric(test_scaled$cardio))^2)
+rmse_rf <- sqrt(mse_rf)
+
+mse_xg <- mean((as.numeric(final_preds) - as.numeric(test_scaled$cardio))^2)
+rmse_xg <- sqrt(mse_xg)
+
+mse_ensemble <- mean((as.numeric(final_preds_ensemble) - as.numeric(test_scaled$cardio))^2)
+rmse_ensemble <- sqrt(mse_ensemble)
+
+# Confusion matrices for additional metrics
+cm_log <- confusionMatrix(boosted_log_preds, log_testing_set$cardio)
+cm_rf <- confusionMatrix(rf_predictions, test_scaled$cardio)
+cm_xg <- confusionMatrix(final_preds, test_scaled$cardio)
+cm_ensemble <- confusionMatrix(final_preds_ensemble, test_scaled$cardio)
+
+# Extract metrics from confusion matrices
+accuracy_log <- cm_log$overall["Accuracy"]
+accuracy_rf <- cm_rf$overall["Accuracy"]
+accuracy_xg <- cm_xg$overall["Accuracy"]
+accuracy_ensemble <- cm_ensemble$overall["Accuracy"]
+
+sensitivity_log <- cm_log$byClass["Sensitivity"]
+sensitivity_rf <- cm_rf$byClass["Sensitivity"]
+sensitivity_xg <- cm_xg$byClass["Sensitivity"]
+sensitivity_ensemble <- cm_ensemble$byClass["Sensitivity"]
+
+specificity_log <- cm_log$byClass["Specificity"]
+specificity_rf <- cm_rf$byClass["Specificity"]
+specificity_xg <- cm_xg$byClass["Specificity"]
+specificity_ensemble <- cm_ensemble$byClass["Specificity"]
+
+balanced_accuracy_log <- cm_log$byClass["Balanced Accuracy"]
+balanced_accuracy_rf <- cm_rf$byClass["Balanced Accuracy"]
+balanced_accuracy_xg <- cm_xg$byClass["Balanced Accuracy"]
+balanced_accuracy_ensemble <- cm_ensemble$byClass["Balanced Accuracy"]
+
+# Final combined metrics table
+metrics_table <- data.frame(
+  Model = c("Boosted Logistic Regression", "Random Forest", "Bagged XGBoost", "Ensemble (Weighted Vote)"),
+  Accuracy = c(accuracy_log, accuracy_rf, accuracy_xg, accuracy_ensemble),
+  F1_Score = c(f1_log, f1_rf, f1_xg, f1_ensemble),
+  MSE = c(mse_log, mse_rf, mse_xg, mse_ensemble),
+  RMSE = c(rmse_log, rmse_rf, rmse_xg, rmse_ensemble),
+  Sensitivity = c(sensitivity_log, sensitivity_rf, sensitivity_xg, sensitivity_ensemble),
+  Specificity = c(specificity_log, specificity_rf, specificity_xg, specificity_ensemble),
+  Balanced_Accuracy = c(balanced_accuracy_log, balanced_accuracy_rf, balanced_accuracy_xg, balanced_accuracy_ensemble)
+)
+
+# View the table
+knitr::kable(metrics_table)
+
+
+
+```
+
+Bagged XGBoost achieved the highest accuracy (0.7326) and F1 score (0.7096), along with the lowest RMSE (0.5172), making it the best performing individual model.
+
+Random Forest showed very similar performance, with an accuracy of 0.7313, F1 score of 0.7083, and RMSE of 0.5183, indicating strong predictive power and model robustness.
+
+Boosted Logistic Regression had slightly lower metrics: accuracy of 0.7103, F1 score of 0.6665, and RMSE of 0.5382. This may be due to its linear assumptions, which limit its ability to capture complex patterns.
+
+Ensemble (Weighted Vote) combined predictions from the above models, resulting in an accuracy of 0.7259, F1 score of 0.6958, and RMSE of 0.5235. While it didn’t outperform Bagged XGBoost, it provided a balanced and generalizable result by integrating strengths from all models.
+
+```{r}
+
+# Data frame
+metrics_df <- tribble(
+  ~Model, ~Accuracy, ~F1_Score, ~MSE, ~RMSE,
+  "Boosted Logistic Regression", 0.7103045, 0.6664918, 0.2896955, 0.5382337,
+  "Random Forest", 0.7313388, 0.7083265, 0.2686612, 0.5183254,
+  "Bagged XGBoost", 0.7325537, 0.7095976, 0.2674463, 0.5171521,
+  "Ensemble (Weighted Vote)", 0.7259473, 0.6957768, 0.2740527, 0.5235004
+)
+
+# Convert to long format
+metrics_long <- metrics_df %>%
+  pivot_longer(cols = -Model, names_to = "Metric", values_to = "Value")
+
+# Plot
+ggplot(metrics_long, aes(x = Model, y = Value, fill = Metric)) +
+  geom_col(position = position_dodge(width = 0.7)) +
+  facet_wrap(~Metric, scales = "free_y") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1)) +
+  labs(title = "Model Performance Comparison", y = "Metric Value", x = "Model")
+
+```
+
+# Original unshaped data metrics
+
+```{r}
+
+url <- "https://raw.githubusercontent.com/varshithasaval/cardio-vasular-dataset/refs/heads/main/cardio_train.csv"
+
+data <- read.csv(url, sep = ";")
+unshaped_df <- data
+
+# outliers
+
+cols <- c("age", "height", "weight", "ap_hi", "ap_lo")
+
+# Function to count outliers
+count_outliers <- function(df, cols) {
+  z <- scale(df[, cols])
+  sapply(as.data.frame(z), function(x) sum(abs(x) > 3))
+}
+
+# Check outliers before any removal
+outliers_before <- count_outliers(unshaped_df, cols)
+
+# Assuming df_imputed is your data frame
+repeat {
+  z <- scale(unshaped_df[, cols])  # Scale the data
+  out_rows <- apply(abs(z) > 3, 1, any)  # Identify outliers
+  
+  # Check if out_rows is all FALSE or NA
+  if (all(!out_rows, na.rm = TRUE)) break  # Stop if no more outliers
+  
+  unshaped_df <- unshaped_df[!out_rows, ]  # Remove outlier rows
+}
+
+# Check outliers after removal
+outliers_after <- count_outliers(unshaped_df, cols)
+
+# Data splitting
+
+set.seed(123)
+
+# Split data into training and testing sets (80% training, 20% testing)
+sample_index <- sample(1:nrow(unshaped_df), 0.8 * nrow(unshaped_df), replace = FALSE)  # Added closing parenthesis
+
+# Create training and testing sets
+train_set <- unshaped_df[sample_index, ]
+test_set <- unshaped_df[-sample_index, ]
+
+# Logistic Regression with 5-fold cross-validation
+
+log_training_set <- train_set
+log_testing_set <- test_set
+
+# Ensure target is a factor
+log_training_set$cardio <- factor(log_training_set$cardio, levels = c(0, 1), labels = c("No", "Yes"))
+log_testing_set$cardio <- factor(log_testing_set$cardio, levels = c(0, 1), labels = c("No", "Yes"))
+
+log_model <- train(factor(cardio) ~ ., 
+                   data = log_training_set, 
+                   method = "glm", 
+                   family = "binomial",
+                   trControl = trainControl(method = "cv", number = 5, classProbs = TRUE, summaryFunction = twoClassSummary),
+                   metric = "ROC"
+)
+
+# BOOSTED LOGISTIC REGRESSION (LogitBoost) 
+
+set.seed(123)
+boosted_log_model <- train(
+  cardio ~ ., 
+  data = log_training_set,
+  method = "LogitBoost",
+  trControl = trainControl(method = "cv", number = 5, classProbs = TRUE, summaryFunction = twoClassSummary),
+  metric = "ROC",
+  tuneLength = 10
+)
+
+boosted_log_preds <- predict(boosted_log_model, newdata = log_testing_set)
+boosted_log_probs <- predict(boosted_log_model, newdata = log_testing_set, type = "prob")[, "Yes"]
+
+cm_log <- confusionMatrix(boosted_log_preds, log_testing_set$cardio)
+
+# random forest
+
+rf_training_set <- train_set
+rf_testing_set <- test_set
+
+# Ensure target is a factor
+rf_training_set$cardio <- factor(rf_training_set$cardio, levels = c(0, 1), labels = c("No", "Yes"))
+rf_testing_set$cardio <- factor(rf_testing_set$cardio, levels = c(0, 1), labels = c("No", "Yes"))
+
+# Preprocessing
+preProc <- preProcess(rf_training_set, method = c("center", "scale"))
+train_scaled <- predict(preProc, rf_training_set)
+test_scaled <- predict(preProc, rf_testing_set)
+
+# Hyperparameter tuning grid
+rf_grid <- expand.grid(mtry = c(2, 3, 4))
+
+# Train Random Forest with CV
+set.seed(123)
+rf_model <- train(
+  cardio ~ ., 
+  data = train_scaled,
+  method = "rf",
+  trControl = trainControl(method = "cv", number = 5, classProbs = TRUE, summaryFunction = twoClassSummary),
+  metric = "ROC",
+  tuneGrid = rf_grid,
+  ntree = 300
+)
+
+# Predictions
+rf_predictions <- predict(rf_model, newdata = test_scaled)
+rf_probs <- predict(rf_model, newdata = test_scaled, type = "prob")[, "Yes"]
+
+# Evaluation
+cm_rf <- confusionMatrix(rf_predictions, test_scaled$cardio)
+
+# XGboost
+
+
+# Set number of bagging iterations
+n_bags <- 10
+set.seed(123)
+
+# Prepare storage for predictions
+bagged_preds <- matrix(NA, nrow = nrow(test_set), ncol = n_bags)
+
+test_matrix <- model.matrix(cardio ~ ., data = test_set)
+
+
+for (i in 1:n_bags) {
+  # Bootstrap sample
+  boot_idx <- sample(1:nrow(train_set), replace = TRUE)
+  boot_train <- train_set[boot_idx, ]
+  boot_label <- ifelse(train_scaled$cardio[boot_idx] == "Yes", 1, 0)
+  
+  # Create DMatrix for this bootstrap
+  boot_matrix <- model.matrix(cardio ~ ., data = boot_train)
+  dtrain_boot <- xgb.DMatrix(data = boot_matrix, label = boot_label)
+  
+  # Train model
+  model <- xgboost(data = dtrain_boot, 
+                   objective = "binary:logistic", 
+                   nrounds = 100, 
+                   eta = 0.1, 
+                   max_depth = 3, 
+                   verbose = 0)
+  
+  # Predict on the test set
+  bagged_preds[, i] <- predict(model, newdata = test_matrix)
+}
+
+# Average predictions and convert to class labels
+final_probs <- rowMeans(bagged_preds)
+final_preds <- ifelse(final_probs > 0.5, "Yes", "No")
+final_preds <- factor(final_preds, levels = c("No", "Yes"))
+
+# Evaluate
+cm_xg <- confusionMatrix(final_preds, test_scaled$cardio)
+
+
+# Accuracies
+boosted_log_accuracy <- cm_log$overall["Accuracy"]
+rf_accuracy <- cm_rf$overall["Accuracy"]
+xgb_accuracy <- cm_xg$overall["Accuracy"]
+
+# Weighted probabilities
+weights <- c(boosted_log_accuracy, rf_accuracy, xgb_accuracy)
+weights <- weights / sum(weights)
+
+final_prob <- (weights[1] * boosted_log_probs) + 
+              (weights[2] * rf_probs) + 
+              (weights[3] * final_probs)
+
+# Ensemble predictions
+final_preds_ensemble <- ifelse(final_prob > 0.5, "Yes", "No")
+final_preds_ensemble <- factor(final_preds_ensemble, levels = c("No", "Yes"))
+
+# Confusion matrix
+cm_ensemble <- confusionMatrix(final_preds_ensemble, test_scaled$cardio)
+
+# F1 Score
+ensemble_f1 <- F1_Score(y_pred = final_preds_ensemble, y_true = test_scaled$cardio, positive = "Yes")
+
+# MSE and RMSE
+ensemble_mse <- mean((as.numeric(final_preds_ensemble) - as.numeric(test_scaled$cardio))^2)
+ensemble_rmse <- sqrt(ensemble_mse)
+
+
+# Metrics table
+ensemble_metrics <- data.frame(
+  Model = "Ensemble (Weighted Vote)",
+  Accuracy = cm_ensemble$overall["Accuracy"],
+  F1_Score = ensemble_f1,
+  MSE = ensemble_mse,
+  RMSE = ensemble_rmse
+)
+
+
+```
+
+
+# Original data Metrics
+
+```{r}
+
+# F1 scores
+f1_log <- F1_Score(y_pred = boosted_log_preds, y_true = log_testing_set$cardio, positive = "Yes")
+f1_rf <- F1_Score(y_pred = rf_predictions, y_true = test_scaled$cardio, positive = "Yes")
+f1_xg <- F1_Score(y_pred = final_preds, y_true = test_scaled$cardio, positive = "Yes")
+f1_ensemble <- F1_Score(y_pred = final_preds_ensemble, y_true = test_scaled$cardio, positive = "Yes")
+
+# MSE & RMSE
+mse_log <- mean((as.numeric(boosted_log_preds) - as.numeric(log_testing_set$cardio))^2)
+rmse_log <- sqrt(mse_log)
+
+mse_rf <- mean((as.numeric(rf_predictions) - as.numeric(test_scaled$cardio))^2)
+rmse_rf <- sqrt(mse_rf)
+
+mse_xg <- mean((as.numeric(final_preds) - as.numeric(test_scaled$cardio))^2)
+rmse_xg <- sqrt(mse_xg)
+
+mse_ensemble <- mean((as.numeric(final_preds_ensemble) - as.numeric(test_scaled$cardio))^2)
+rmse_ensemble <- sqrt(mse_ensemble)
+
+# Confusion matrices for additional metrics
+cm_log <- confusionMatrix(boosted_log_preds, log_testing_set$cardio)
+cm_rf <- confusionMatrix(rf_predictions, test_scaled$cardio)
+cm_xg <- confusionMatrix(final_preds, test_scaled$cardio)
+cm_ensemble <- confusionMatrix(final_preds_ensemble, test_scaled$cardio)
+
+# Extract metrics from confusion matrices
+accuracy_log <- cm_log$overall["Accuracy"]
+accuracy_rf <- cm_rf$overall["Accuracy"]
+accuracy_xg <- cm_xg$overall["Accuracy"]
+accuracy_ensemble <- cm_ensemble$overall["Accuracy"]
+
+sensitivity_log <- cm_log$byClass["Sensitivity"]
+sensitivity_rf <- cm_rf$byClass["Sensitivity"]
+sensitivity_xg <- cm_xg$byClass["Sensitivity"]
+sensitivity_ensemble <- cm_ensemble$byClass["Sensitivity"]
+
+specificity_log <- cm_log$byClass["Specificity"]
+specificity_rf <- cm_rf$byClass["Specificity"]
+specificity_xg <- cm_xg$byClass["Specificity"]
+specificity_ensemble <- cm_ensemble$byClass["Specificity"]
+
+balanced_accuracy_log <- cm_log$byClass["Balanced Accuracy"]
+balanced_accuracy_rf <- cm_rf$byClass["Balanced Accuracy"]
+balanced_accuracy_xg <- cm_xg$byClass["Balanced Accuracy"]
+balanced_accuracy_ensemble <- cm_ensemble$byClass["Balanced Accuracy"]
+
+# Final combined metrics table
+metrics_table <- data.frame(
+  Model = c("original Logistic Regression", "original Random Forest", "original Bagged XGBoost", "original Ensemble (Weighted Vote)"),
+  Accuracy = c(accuracy_log, accuracy_rf, accuracy_xg, accuracy_ensemble),
+  F1_Score = c(f1_log, f1_rf, f1_xg, f1_ensemble),
+  MSE = c(mse_log, mse_rf, mse_xg, mse_ensemble),
+  RMSE = c(rmse_log, rmse_rf, rmse_xg, rmse_ensemble),
+  Sensitivity = c(sensitivity_log, sensitivity_rf, sensitivity_xg, sensitivity_ensemble),
+  Specificity = c(specificity_log, specificity_rf, specificity_xg, specificity_ensemble),
+  Balanced_Accuracy = c(balanced_accuracy_log, balanced_accuracy_rf, balanced_accuracy_xg, balanced_accuracy_ensemble)
+)
+
+# View the table
+knitr::kable(metrics_table)
+
+```
+
+
+# Boosted Logistic Regression
+Unshaped Data:
+
+Accuracy: 71.43%, F1-Score: 66.88%, MSE: 0.286, RMSE: 0.534
+
+Sensitivity: 82.73% (best among all), Specificity: 59.45%, Balanced Accuracy: 71.09%
+
+Shaped Data:
+
+Accuracy: 71.03%, F1-Score: 66.65%, RMSE: 0.538
+
+Slight drop across all metrics after shaping.
+
+# Random Forest
+Unshaped Data:
+
+Accuracy: 73.27%, F1-Score: 70.85%, MSE: 0.267, RMSE: 0.517
+
+Sensitivity: 79.24%, Specificity: 66.95%, Balanced Accuracy: 73.09%
+
+Shaped Data:
+
+Accuracy: 73.13%, F1-Score: 70.83%, RMSE: 0.518
+
+Metrics stayed almost unchanged, showing high robustness.
+
+# Bagged XGBoost
+Unshaped Data:
+
+Accuracy: 73.70% (highest), F1-Score: 71.52% (highest), MSE: 0.263, RMSE: 0.513
+
+Sensitivity: 79.01%, Specificity: 68.06%, Balanced Accuracy: 73.54%
+
+Shaped Data:
+
+Accuracy: 73.26%, F1-Score: 70.96%, RMSE: 0.517
+
+Slight decline, but still top-performing overall.
+
+# Ensemble (Weighted Vote)
+Unshaped Data:
+
+Accuracy: 73.22%, F1-Score: 70.12%, MSE: 0.268, RMSE: 0.517
+
+Sensitivity: 81.20%, Specificity: 64.76%, Balanced Accuracy: 72.98%
+
+Shaped Data:
+
+Accuracy: 72.59%, F1-Score: 69.58%, RMSE: 0.524
+
+Performance dropped a bit post-shaping.
+
+# Best Overall Model: Bagged XGBoost (Unshaped Data)
+Top Accuracy (73.70%), F1-Score (71.52%), Balanced Accuracy (73.54%)
+
+Best combination of precision, recall, and error control.
+
+Performs best on raw features, leveraging complex patterns without shaping.
+
+
+
+
